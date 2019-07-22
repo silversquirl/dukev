@@ -1,3 +1,4 @@
+// vim: fdm=marker noet
 // TODO: event loop flags
 // TODO: loop_run flags
 
@@ -228,24 +229,35 @@ static void dukev_collect_watchers(struct ev_loop *loop, ev_prepare *watcher, in
 	duk_set_top(ctx, base);
 }
 
-static duk_ret_t dukev_loop_constructor(duk_context *ctx) {
+static duk_ret_t dukev_loop_construct_jsobj(duk_context *ctx, struct ev_loop *loop) {
 	duk_push_this(ctx);
 	duk_idx_t thisI = duk_get_top_index(ctx);
 
+	// Set prototype
 	duk_get_prototype(ctx, thisI);
 	duk_put_prop_literal(ctx, thisI, "prototype");
 
-	struct ev_loop *loop = ev_default_loop(0);
+	// Store pointer to C object
 	duk_push_pointer(ctx, loop);
 	duk_put_prop_literal(ctx, thisI, "_ptr");
 
+	// Create watcher array
 	duk_push_array(ctx);
 	duk_put_prop_literal(ctx, -2, "_watchers");
 
+	// Set finalizer
 	duk_push_c_function(ctx, dukev_loop_finalize, 1);
 	duk_set_finalizer(ctx, -2);
 
 	return 0;
+}
+
+static duk_ret_t dukev_loop_constructor(duk_context *ctx) {
+	return dukev_loop_construct_jsobj(ctx, ev_loop_new(0));
+}
+
+static duk_ret_t dukev_loop_default(duk_context *ctx) {
+	return dukev_loop_construct_jsobj(ctx, ev_default_loop(0));
 }
 
 static duk_ret_t dukev_loop_run(duk_context *ctx) {
@@ -308,7 +320,9 @@ static duk_ret_t dukev_async_send(duk_context *ctx) {
 	// Send the event
 	ev_async_send(loop, this);
 
-	return 0;
+	// Return this so we can chain
+	duk_dup(ctx, thisI);
+	return 1;
 }
 
 DUKEV_FUNC_LIST(async) {
@@ -323,6 +337,17 @@ duk_ret_t dukopen_dukev(duk_context *ctx) {
 	DUKEV_REGISTER(Loop, loop, 0);
 	DUKEV_REGISTER(Timer, timer, 3);
 	DUKEV_REGISTER(Async, async, 1);
+
+	// Set dukev.default
+	duk_push_c_function(ctx, dukev_loop_default, 0);
+	// dukev_loop_default.prototype = exports.loop.prototype
+	duk_get_prop_literal(ctx, -2, "Loop");
+	duk_get_prop_literal(ctx, -1, "prototype");
+	duk_put_prop_literal(ctx, -3, "prototype");
+	duk_pop(ctx);
+	// exports.default = new dukev_loop_default();
+	duk_new(ctx, 0);
+	duk_put_prop_literal(ctx, -2, "default");
 
 	return 1;
 }

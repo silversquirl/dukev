@@ -47,10 +47,16 @@ static duk_ret_t mod_search(duk_context *ctx) {
 		duk_push_heap_stash(ctx);
 		duk_get_prop_literal(ctx, -1, "dukev");
 		duk_put_prop_literal(ctx, moduleI, "exports");
+
+		// module.filename = "dukev.so";
+		duk_push_literal(ctx, "dukev.so");
+		duk_put_prop_literal(ctx, moduleI, "filename");
+
 		return 0;
 	}
 	duk_pop(ctx);
 
+	// We need the file reader function later on
 	duk_push_c_function(ctx, read_file_sync, 1);
 
 	// Construct the filename to read
@@ -58,6 +64,11 @@ static duk_ret_t mod_search(duk_context *ctx) {
 	duk_push_literal(ctx, ".js");
 	duk_concat(ctx, 2);
 
+	// Save the filename in module.filename
+	duk_dup_top(ctx);
+	duk_put_prop_literal(ctx, moduleI, "filename");
+
+	// Read the file
 	duk_call(ctx, 1);
 	return 1;
 }
@@ -67,10 +78,28 @@ static duk_ret_t duk_print(duk_context *ctx) {
 	return 0;
 }
 
-void fatal_handler(void *data, const char *msg) {
-	fprintf(stderr, "%s\n", msg);
+// print_repr is designed so it can be called directly from C, or from JS as an external C function taking 1 argument
+// If called directly, it will print the item on top of the stack without removing it
+static duk_ret_t print_repr(duk_context *ctx) {
+	duk_idx_t objI = duk_get_top_index(ctx);
+
+	// Duktape.enc(obj);
+	duk_get_global_literal(ctx, "Duktape");
+	duk_push_literal(ctx, "enc");
+	duk_push_literal(ctx, "jx");
+	duk_dup(ctx, objI);
+	duk_call_prop(ctx, -4, 2);
+	puts(duk_to_string(ctx, -1));
+
+	duk_set_top(ctx, objI + 1);
+
+	return 0;
+}
+
+static void fatal_handler(void *data, const char *msg) {
+	fprintf(stderr, "fatal error: %s\n", msg);
 	fflush(stderr);
-	exit(1);
+	abort();
 }
 
 int main(int argc, char *argv[]) {
@@ -78,6 +107,7 @@ int main(int argc, char *argv[]) {
 		printf("Usage: %s <filename>\n", argv[0]);
 		return 1;
 	}
+	const char *filename = argv[1];
 
 	duk_context *ctx = duk_create_heap(NULL, NULL, NULL, NULL, fatal_handler);
 	duk_module_duktape_init(ctx);
@@ -96,10 +126,26 @@ int main(int argc, char *argv[]) {
 	duk_push_c_function(ctx, duk_print, 1);
 	duk_put_global_literal(ctx, "print");
 
+	duk_push_c_function(ctx, print_repr, 1);
+	duk_put_global_literal(ctx, "print_repr");
+
+	// Load source code
 	duk_push_c_function(ctx, read_file_sync, 1);
-	duk_push_string(ctx, argv[1]);
+	duk_push_string(ctx, filename);
 	duk_call(ctx, 1);
-	duk_eval_noresult(ctx);
+
+	// Compile and run
+	duk_push_string(ctx, filename);
+	if (duk_pcompile(ctx, DUK_COMPILE_SHEBANG)) {
+		print_repr(ctx);
+		fprintf(stderr, "%s: %s\n", filename, duk_safe_to_string(ctx, -1));
+		return 1;
+	}
+	if (duk_pcall(ctx, 0)) {
+		duk_get_prop_literal(ctx, -1, "stack");
+		fprintf(stderr, "%s\n", duk_require_string(ctx, -1));
+		return 1;
+	}
 
 	return 0;
 }
