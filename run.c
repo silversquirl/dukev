@@ -4,8 +4,6 @@
 #include <duktape.h>
 #include <duk_module_duktape.h>
 
-#include "dukev.h"
-
 static duk_ret_t read_file_sync(duk_context *ctx) {
 	duk_size_t buflen = 1024, bufi = 0;
 	char *buf = duk_push_dynamic_buffer(ctx, buflen);
@@ -31,6 +29,22 @@ static duk_ret_t read_file_sync(duk_context *ctx) {
 	return 1;
 }
 
+#define MOD(name) duk_ret_t dukopen_##name(duk_context *ctx)
+MOD(dukev);
+MOD(io);
+#undef MOD
+
+static const struct {
+	const char *name;
+	duk_c_function open;
+} internal_modules[] = {
+#define MOD(name) {#name, dukopen_##name}
+	MOD(dukev),
+	MOD(io),
+#undef MOD
+};
+enum {num_internal_modules = sizeof internal_modules / sizeof *internal_modules};
+
 static duk_ret_t mod_search(duk_context *ctx) {
 	// Arguments
 	enum {
@@ -40,21 +54,22 @@ static duk_ret_t mod_search(duk_context *ctx) {
 		moduleI,
 	};
 
-	// Special case for dukev
-	duk_push_literal(ctx, "dukev");
-	if (duk_strict_equals(ctx, nameI, -1)) {
-		// module.exports = <heap stash>.dukev;
-		duk_push_heap_stash(ctx);
-		duk_get_prop_literal(ctx, -1, "dukev");
-		duk_put_prop_literal(ctx, moduleI, "exports");
+	// Check internal modules
+	const char *name = duk_require_string(ctx, nameI);
+	for (int i = 0; i < num_internal_modules; i++) {
+		if (!strcmp(internal_modules[i].name, name)) {
+			// module.exports = <module.open>();
+			duk_push_c_function(ctx, internal_modules[i].open, 0);
+			duk_call(ctx, 0);
+			duk_put_prop_literal(ctx, moduleI, "exports");
 
-		// module.filename = "dukev.so";
-		duk_push_literal(ctx, "dukev.so");
-		duk_put_prop_literal(ctx, moduleI, "filename");
+			// module.filename = "dukev.so";
+			duk_push_literal(ctx, "dukev.so");
+			duk_put_prop_literal(ctx, moduleI, "filename");
 
-		return 0;
+			return 0;
+		}
 	}
-	duk_pop(ctx);
 
 	// We need the file reader function later on
 	duk_push_c_function(ctx, read_file_sync, 1);
@@ -74,7 +89,11 @@ static duk_ret_t mod_search(duk_context *ctx) {
 }
 
 static duk_ret_t duk_print(duk_context *ctx) {
-	puts(duk_to_string(ctx, 0));
+	duk_size_t strlen;
+	const char *str = duk_to_lstring(ctx, 0, &strlen);
+	fwrite(str, 1, strlen, stdout);
+	putchar('\n');
+	fflush(stdout);
 	return 0;
 }
 
@@ -115,13 +134,6 @@ int main(int argc, char *argv[]) {
 	duk_get_global_literal(ctx, "Duktape");
 	duk_push_c_function(ctx, mod_search, 4);
 	duk_put_prop_literal(ctx, -2, "modSearch");
-
-	// <heap stash>.dukev = dukopen_dukev();
-	duk_push_heap_stash(ctx);
-	duk_push_c_function(ctx, dukopen_dukev, 0);
-	duk_call(ctx, 0);
-	duk_put_prop_literal(ctx, -2, "dukev");
-	duk_pop(ctx);
 
 	duk_push_c_function(ctx, duk_print, 1);
 	duk_put_global_literal(ctx, "print");

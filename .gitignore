@@ -1,3 +1,5 @@
 duktape/
+duktape.a
 dukev.so
 run
+*.o
