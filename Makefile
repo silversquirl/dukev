@@ -1,4 +1,4 @@
-DUKTAPE := duktape/src
+DUKTAPE := duktape-src
 DUKTAPE_EXTRAS := duktape/extras
 
 CC := clang
